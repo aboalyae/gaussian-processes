@@ -1,0 +1,136 @@
+## function for computing test error
+test_sq_err <- function (pred) mean((pred-testy)^2)
+
+## Creating the covariance matrix
+gp_cov = function (x_train, covfunc, hyper)
+{
+  n = nrow(x_train)
+  C = matrix(NA,n,n)
+  
+  for (i in 1:n)
+  { C[i,] = covfunc(x_train[i,],x_train,hyper)
+  }
+  diag(C) = diag(C) + hyper[1]^2
+  C
+} 
+
+## Predicting the response for test cases
+
+gp_predict = function (x_train, y_train, x_test, covfunc, hyper)
+{
+  n = nrow(x_train)
+  
+  C = gp_cov(x_train,covfunc,hyper)
+  a = solve(C,y_train)
+  
+  r = numeric(nrow(x_test))
+  
+  for (i in 1:nrow(x_test))
+  { k = covfunc(x_test[i,],x_train,hyper)
+  r[i] = k %*% a
+  }
+  
+  r
+}
+
+## optimizing for hyperparameters using cross validation
+
+gp_cv = function (x_train, y_train, covf, K, hypers0, ...)
+{
+  div = floor(seq(0,length(y_train),length=K+1))
+  e = rep(0,length(y_train))
+  m = nlm (
+    function (h)
+    { for (i in 1:K)
+    { r = (div[i]+1):div[i+1]
+    e[r] = (y_train[r] - gp_predict (x_train[-r,], y_train[-r], 
+                                      x_train[r,], covf, h^2 + 0.01))^2
+    }
+      mean(e)
+    },
+    sqrt(hypers0-0.01),
+    ... )
+  
+  cat ("Minimum cross validation error:", m$minimum, "\n")
+  
+  m$estimate^2 + 0.01
+}
+
+
+## Covariance functions
+
+covf0 = function(x1,x2,h)
+{
+  as.vector(100^2 * colSums(x1*t(x2)))
+}
+
+covf2 <- function (x1, x2, h)
+{
+  as.vector (100^2 + h[1]^2 * exp (-h[2]^2*colSums((x1-t(x2))^2)))
+}
+
+testx = as.matrix(read.table("http://www.cs.toronto.edu/~rsalakhu/STA414_2015/testx",header=F))
+testy = scan("http://www.cs.toronto.edu/~rsalakhu/STA414_2015/testy")
+trainx = as.matrix(read.table("http://www.cs.toronto.edu/~rsalakhu/STA414_2015/train1x",header=F))
+trainy = scan("http://www.cs.toronto.edu/~rsalakhu/STA414_2015/train1y")
+
+train_x_0=cbind(1,trainx[,]);test_x_0=cbind(1,testx[,])
+
+weights=solve(t(train_x_0)%*%train_x_0)%*% t(train_x_0)%*%trainy
+prediction_train=t(weights)%*%t(train_x_0)
+sse_train= sum((trainy-t(prediction_train))^2)
+prediction_test=t(weights)%*%t(test_x_0)
+sse_test=sum((testy-t(prediction_test))^2)
+mse_train=mean((trainy - t(prediction_train))^2)
+mse_test=mean((testy - t(prediction_test))^2)  #0.2876439
+
+
+gp_lin = gp_predict(trainx,trainy,testx,covf0,1)
+round(test_sq_err(gp_lin),3)  #0.288
+
+## squared exponential covariance before rescaling
+
+for (init in list (c(1,1,1), c(0.2,2,2)))
+{ cat("\nInitial values:",init,"\n")
+  print(system.time(gp2_hypers_cv <- 
+                      gp_cv (trainx, trainy, covf2, 10, init)))
+  cat("Hyperparameter values:",gp2_hypers_cv,"\n")
+  gp2_pred_cv <- gp_predict (trainx, trainy, testx, covf2, gp2_hypers_cv)
+  cat ("Average test SE:",test_sq_err(gp2_pred_cv),"\n")
+}
+trainx[,1] = trainx[,1] / 10
+trainx[,7] = trainx[,7] / 10
+testx[,1] = testx[,1] / 10
+testx[,7] = testx[,7] / 10
+for (init in list (c(1,1,1), c(0.2,2,2)))
+{ cat("\nInitial values:",init,"\n")
+  print(system.time(gp2_hypers_cv <- 
+                      gp_cv (trainx, trainy, covf2, 10, init)))
+  cat("Hyperparameter values:",gp2_hypers_cv,"\n")
+  gp2_pred_cv <- gp_predict (trainx, trainy, testx, covf2, gp2_hypers_cv)
+  cat ("Average test SE:",test_sq_err(gp2_pred_cv),"\n")
+}
+
+require(NMOF)
+gamma=seq(0.1,10,0.5)
+rho=seq(0.01,1,0.05)
+gridSearch(function(hyper) mean((gp_predict (trainx, trainy, testx, covf2, gp2_hypers_cv)-testy)^2),c(gamma,rho),npar=2)
+
+
+Discussion
+Results with linear model: The average squared error on test cases is 0.2876439. The Guassian process model with the covariance function 
+designed to mimic the simple linear model produced relatively same average squared error (0.288)on test cases, as expected.
+Using nlm, with rescaling of inputs 1 and 7, the gaussian process model with the covariance function of exponential of squared differences had an average
+squared error of 0.2619108 with hyperparameters values of 0.1940754 and 2.213205. Although the average squared errors were the same for the two initial values, the hyperparameter
+estimates differed meaning cross validation may be somewhat sensitive to initial values. Using grid search, I got an average
+squared error of 0.2619108 with hyperparameters values of   0.21 and 2.10
+Without rescaling, using nlm, the MSE was 0.276 and hyperparameter values are 0.2047 and 0.529044. Using grid search, I got relatively same values.
+
+Conclusion: Gaussian Process seems to perform better than a simple linear model. However,
+cross validation is a slow process and seems to be not very robust.It seems having a 
+squared exponential term performs better than a simple linear term. The covariance term with the exponential of squared
+differences produces to functions that are smooth. The hyperparameter values did not make sense without rescaling as it was
+off what is expected.Using nlm makes more sense as it gives much more accurate estimates to the 
+hyperparameters than grid search. The gaussian process took much longer to compute for the squared
+exponential term about 43.743 seconds in comparison to the linear convariance which took about 12.118 seconds.
+  
